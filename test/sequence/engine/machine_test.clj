@@ -30,7 +30,9 @@
 (deftest t-next
   (is (is-ok? (rule-parsing demorules-t {::m/next :header} :header)))
   (is (not (is-ok? (rule-parsing demorules-t {::m/next :header} :trailer))))
-  (is (not (is-ok? (validate demorules-t :id (mapv (fn [x]  {:id x}) [:header :trailer :trailer]))))))
+  (is (not (is-ok? (validate {:rules demorules-t
+                              :tag-fn identity
+                              :user-sequence [:header :trailer :trailer]})))))
 
 (deftest tree-seqt
   (is (not (is-ok? (reduce (partial rule-parsing demorules-t) {} [:header :header]))))
@@ -41,7 +43,10 @@
   (is (not (is-ok? (reduce (partial rule-parsing demorules-t) {} [:trailer])))))
 
 (deftest positional
-  (is (= 2 (::m/position (last (::m/problem (validate demorules-t :id (mapv (fn [x]  {:id x}) [:header :trailer :trailer]))))))))
+  (is (= 2 (::m/position (last (::m/problem
+                                (validate {:rules demorules-t
+                                           :tag-fn identity
+                                           :user-sequence [:header :trailer :trailer]})))))))
 (deftest regression
   (is (is-ok? (reduce (partial rule-parsing demorules-t) {} [:header :beta :beta :trailer]))))
 (deftest regression2
