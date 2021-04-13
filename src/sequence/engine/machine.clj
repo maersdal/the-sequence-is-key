@@ -91,15 +91,21 @@
                    ]
                (case rule
                  ::not-eventually (if (and (= value k) (not immediate))
-                                    (update arules ::problem conj ["rule" ::not-eventually value "broken by" k "at" (active-rules ::position)])
+                                    (update arules ::problem conj {:rule [::not-eventually value]
+                                                                   :broken-by k
+                                                                   ::position (active-rules ::position)})
                                     arules)
                  ::is-after (if-not (contains? active-rules value)
-                              (update arules ::problem conj ["rule" ::is-after value "broken by" k "at" (active-rules ::position)])
+                              (update arules ::problem conj {:rule [::is-after value]
+                                                             :broken-by k
+                                                             ::position (active-rules ::position)})
                               arules)
                  ::relax (apply dissoc arules value)
                  ::next (assoc arules ::next value)
                  ::free arules
-                 :default (update arules ::problem conj [::not-implemented "rule" rule value "at" (active-rules ::position)]))))
+                 :default (update arules ::problem conj
+                                  {:rule [::not-implemented rule value]
+                                   ::position (active-rules ::position)}))))
            active-rules clause)))
 
 (defn rule-reduce-immediate [rules clause k]
@@ -118,7 +124,9 @@
   ;; next is priority rule!
   (if-let [target (active-rules ::next)]
     (if-not (= k (active-rules ::next))
-      (update active-rules ::problem conj ["rule" ::next target  "broken by" k "at" (active-rules ::position)])
+      (update active-rules ::problem conj {:rule [::next target]  
+                                           :broken-by k 
+                                           ::position (active-rules ::position)})
       (rule-parsing all-rules (dissoc active-rules ::next) k))
     ;;
     (if (contains? active-rules k)
@@ -144,7 +152,33 @@
    (filter (complement nil?) (map #(get % ident) data))))
 
 
+(defn validate-2
+  [properties]
+  {:pre [(every? properties [:rules :tag-fn :user-sequence])
+         (keyword? ((:tag-fn properties) (first (:user-sequence properties))))]}
+  (let [{:keys [rules tag-fn user-sequence]} properties
+        seq-xf (comp
+                (filter (complement nil?))
+                (map tag-fn))
+        seq-ed (eduction seq-xf user-sequence)
+        red-rules (reduce
+                   (partial rule-parsing rules) rule-parsing-default
+                   seq-ed)]
+    (if (is-ok? red-rules)
+      {:ok true}
+      {::problem (red-rules ::problem)})))
+
+
 (comment
+  (validate-2 {:rules {:header {::not-eventually :header}, :beta {::is-after :header}}
+               :tag-fn (fn [_] 1)
+               :user-sequence [:header :trailer :header]})
+
+  (let [seq-xf (comp
+                (filter (complement nil?))
+                (map #(:fun %)))]
+    (transduce seq-xf conj [{:fun 1} {:a 2}])
+    )
   (let [allrules {:header {::not-eventually :header}, :beta {::is-after :header}, :trailer {::is-after :header, ::relax [:header], ::next :header}}
         activerules {:header {::not-eventually :header}, :beta {::is-after :header}}
         k :beta]

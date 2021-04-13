@@ -41,7 +41,7 @@
   (is (not (is-ok? (reduce (partial rule-parsing demorules-t) {} [:trailer])))))
 
 (deftest positional
-  (is (= 2 (last (last ((validate demorules-t :id (mapv (fn [x]  {:id x}) [:header :trailer :trailer])) ::m/problem))))))
+  (is (= 2 (::m/position (last (::m/problem (validate demorules-t :id (mapv (fn [x]  {:id x}) [:header :trailer :trailer]))))))))
 (deftest regression
   (is (is-ok? (reduce (partial rule-parsing demorules-t) {} [:header :beta :beta :trailer]))))
 (deftest regression2
