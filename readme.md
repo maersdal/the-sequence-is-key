@@ -2,6 +2,7 @@
 
 A DSL for a limited subset of Linear Temporal Logic
 
+Ideally you have idempotent data, and will never need this library. But hey, the real world is messy.
 ### Whom this library is for
 
 You have a sequence of data entering from somewhere. But there is something special about this data; 
@@ -44,11 +45,11 @@ You will not use this library for type-checking you data. That is more easily do
 ;; valid rules are: #{::not-eventually ::is-after ::relax ::next ::free}
 (require '[sequence.engine.machine :as m])
 (m/defrules demorules-t
-  {:header {::m/not-eventually :header}
-   :beta {::m/is-after :header}
-   :trailer {::m/is-after :header
-             ::m/relax [:header]
-             ::m/next :header}})
+  {:header {::m/not-eventually :header} ; :header cannot follow :header
+   :beta {::m/is-after :header} ; :header must have arrived before :beta
+   :trailer {::m/is-after :header 
+             ::m/relax [:header] ; :header rule relaxed
+             ::m/next :header}}) ; :header must follow immediately after :trailer
 
 (def my-data
 [:header :beta :trailer :header])

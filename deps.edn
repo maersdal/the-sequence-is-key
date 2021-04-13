@@ -10,4 +10,10 @@
  {:dev {:extra-paths ["dev"]}
   :test {:extra-paths ["test"]
          :extra-deps {org.clojure/test.check {:mvn/version "1.1.0"}
-                      criterium/criterium {:mvn/version "0.4.6"}}}}}
+                      criterium/criterium {:mvn/version "0.4.6"}}}
+  :project/mv-spit
+  {:extra-deps {metav/metav {:mvn/version "1.6.7"}}
+   :main-opts ["-m" "metav.spit"
+               "--output-dir" "src"
+               "--namespace" "sequence.meta"
+               "--formats" "edn"]}}}
