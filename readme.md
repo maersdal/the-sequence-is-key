@@ -21,7 +21,7 @@ This can be extended by saying "`:trailer` must follow a `:header`, and immediat
   {:header  {::m/not-eventually :header}
    :trailer {::m/is-after :header
              ::m/relax [:header]
-             ::m/next :header}}
+             ::m/next :header}})
 ```
 
 This is hard to describe in any programming language, even in math.  I've been inspired mostly by [Linear Temporal Logic](https://en.wikipedia.org/wiki/Linear_temporal_logic).
@@ -54,11 +54,23 @@ You will not use this library for type-checking you data. That is more easily do
 (def my-data
 [:header :beta :trailer :header])
 
-(m/is-ok? (reduce (partial m/rule-parsing demorules-t)
+(m/validate {:rules demorules-t
+             :tag-fn identity
+             :user-sequence my-data})
+;=> {:ok true}
+(m/validate {:rules demorules-t
+             :tag-fn identity
+             :user-sequence [:header :beta :header]})
+;; => #:sequence.engine.machine{:problem
+;;                              [{:rule [:sequence.engine.machine/not-eventually :header],
+;;                                :broken-by :header,
+;;                                :sequence.engine.machine/position 2}]}
+
+(m/is-ok? (reduce (m/rule-parser demorules-t)
         m/rule-parsing-default
         my-data))
 ;=> true
-(m/is-ok? (reduce (partial m/rule-parsing demorules-t)
+(m/is-ok? (reduce (m/rule-parser demorules-t)
         m/rule-parsing-default
         [:header :beta :header]))
 ;=> false
