@@ -1,10 +1,19 @@
 (ns sequence.engine.machine
   (:require
    [clojure.string :as str]
-   [clojure.spec.alpha :as s]))
+   [clojure.spec.alpha :as s]
+   [clojure.set :as set]
+   [clojure.pprint :as pprint]))
 ;; 2021 Magnus Rentsch Ersdal
 (def ^:dynamic debugprint false)
-(def valid-rules #{::not-eventually ::is-after ::relax ::next ::free})
+(def valid-rules 
+  "temporality: 
+   ::not-eventually - post
+   ::next - post
+   ::relax - post
+   ::is-after - immediate
+   "
+  #{::not-eventually ::is-after ::relax ::next ::free})
 
 (defn get-subjects [rules]
   (->> (vals rules)
@@ -49,12 +58,52 @@
     (str (notok (s/explain-str ::rules rules))
          (notok (s/explain-str ::rule-consistent rules)))))
 
+(defn get-trigd-by 
+  "get whatever ::rule triggers in rules"
+  [rules rule]
+  (->> (vals rules)
+       (map #(select-keys % [rule]))
+       (remove empty?)
+       (map vals)
+       flatten))
+
+(defn not-eventually-not-released-warnings 
+  "warning: not eventually should be released by something?"
+  [rules]
+  (let [not-eventually-triggers (set (get-trigd-by rules ::not-eventually))
+        relax-targets (set (get-trigd-by rules ::relax))
+        m-s (set/difference not-eventually-triggers relax-targets)
+        _ (println not-eventually-triggers
+                   relax-targets)]
+    (if-not (empty? m-s)
+      (let [n (count m-s)
+            plural? (> n 1)
+            noun (fn [singular plural] (if plural? singular plural))
+            repr (if plural? (vec m-s) (first m-s))]
+        (str "Warning:"
+             " the " (noun "targets" "target") " " repr " "
+             (noun "are" "is") " never ::relax 'ed, thus " repr
+             " can never appear more than once in your sequence"
+             " please make sure that this is your intended behavior"))
+      nil)))
+
+(defn explain-warnings [rules]
+  (remove nil? ((juxt
+                 not-eventually-not-released-warnings)
+                rules)))
+
+
+
 (defmacro defrules
   [name rulemap]
   (let [e (validate-rules rulemap)
-        errstr (explain-rules rulemap)]
+        errstr (explain-rules rulemap)
+        warnings (explain-warnings rulemap)]
     (if e
-      `(def ~name ~rulemap)
+      (do
+        (when (not-empty warnings)
+          (pprint/pprint warnings))
+        `(def ~name ~rulemap))
       (throw (ex-info (str "bad definition of rules, problem:\n" errstr) {})))))
 
 ;; data -> get rule from data
@@ -78,68 +127,100 @@
 ;;  ::relax removes the :header kvp,
 ;;  ::next :header is moved to ::next kw
 ;;  3 [] -> {::next :header}
-
-(defn rule-reduce
-  ([active-rules clause k]
-   (rule-reduce active-rules clause k false))
-  ([active-rules clause k immediate]
-   (reduce (fn [arules kvp]
-             (let [[rule value] kvp
-                  ;_ (println arules kvp)
-                   ]
-               (case rule
-                 ::not-eventually (if (and (= value k) (not immediate))
-                                    (update arules ::problem conj {:rule [::not-eventually value]
-                                                                   :broken-by k
-                                                                   ::position (active-rules ::position)})
-                                    arules)
-                 ::is-after (if-not (contains? active-rules value)
-                              (update arules ::problem conj {:rule [::is-after value]
-                                                             :broken-by k
-                                                             ::position (active-rules ::position)})
-                              arules)
-                 ::relax (apply dissoc arules value)
-                 ::next (assoc arules ::next value)
-                 ::free arules
-                 :default (update arules ::problem conj
-                                  {:rule [::not-implemented rule value]
-                                   ::position (active-rules ::position)}))))
-           active-rules clause)))
-
-(defn rule-reduce-immediate [rules clause k]
-  (rule-reduce rules clause k true))
-
+;;  
+(defn conj-with-vec [x item]
+  (if (nil? x)
+    [item]
+    (conj x item)))
 (defn inc-or-zero [x]
-  (if-not (nil? x)
-    (inc x)
-    0))
+  (if (nil? x)
+    0
+    (inc x)))
+
+
+(defn check-cond 
+  "all conditions in here."
+  [rules item]
+  {:pre [(keyword? item)]}
+  (let [clauses (rules item)
+        pos (rules ::position)
+        clause-reducer (fn [arules [rule value]]
+                         (case rule
+                           ::not-eventually (if (= value item)
+                                              (update arules ::problem conj-with-vec {:rule [::not-eventually value]
+                                                                             :broken-by item
+                                                                             ::position pos})
+                                              arules)
+                           ::is-after (if-not (contains? rules value)
+                                        (update arules ::problem conj-with-vec {:rule [::is-after value]
+                                                                       :broken-by item
+                                                                       ::position pos})
+                                        arules)
+                           arules))
+        rules (let [r (get rules ::next :no-next-clause)]
+                (condp = r
+                  item rules
+                  :no-next-clause rules
+                  (update rules
+                          ::problem
+                          conj-with-vec
+                          {:rule [::next item]
+                           :broken-by item
+                           ::position pos})))]
+    (reduce clause-reducer
+            rules clauses)))
+
+(defn update-cond-pre
+  ""
+  [all-rules rules item]
+  (let [clauses (all-rules item)]
+    (reduce (fn [arules clause]
+              (let [[rule value] clause]
+                (case rule
+                  ::is-after (update arules item conj clause)
+                  arules))) rules clauses)))
+
+
+(defn update-cond-post [all-rules rules item]
+  {:pre [(keyword? item)]}
+  (let [rules (-> (dissoc rules ::next)
+                  (update ::position inc-or-zero)) ; ::next is always relaxed.
+        clauses (all-rules item)
+        newrules (assoc rules item clauses)]
+    (reduce (fn [arules [rule value]]
+              (case rule
+                ::next (assoc arules ::next value)
+                ::relax (apply dissoc arules value)
+                arules))
+            newrules clauses)))
+
+
+(defn rule-parser
+  "construct reducer for given rules
+   three logical things: 
+   ADD pre-conditions, the new rules created by hitting the item, which must be checked against in the current step
+   CHECK conditions, all checks.
+   ADD post-conditions, which will affect next item
+   "
+  [all-rules]
+  (fn [active-rules item]
+    (when debugprint
+      (println active-rules item))
+    (let [
+          pre-rules (update-cond-pre all-rules active-rules item)
+          checked-rules (check-cond pre-rules item)
+          post-rules (update-cond-post all-rules checked-rules item)
+          ]
+      post-rules)
+    ))
 
 (def rule-parsing-default {::position 0})
 
-(defn rule-parsing [all-rules active-rules k]
-  (when debugprint
-    (println active-rules k))
-  ;; next is priority rule!
-  (if-let [target (active-rules ::next)]
-    (if-not (= k (active-rules ::next))
-      (update active-rules ::problem conj {:rule [::next target]
-                                           :broken-by k
-                                           ::position (active-rules ::position)})
-      (rule-parsing all-rules (dissoc active-rules ::next) k))
-    ;;
-    (if (contains? active-rules k)
-      (let [clause (active-rules k)]
-        (update (rule-reduce active-rules clause k)
-                ::position inc-or-zero))
-      (let [clause (all-rules k)]
-        (-> (rule-reduce-immediate active-rules clause k)
-            (assoc k clause)
-            (update ::position inc-or-zero))))))
+(defn reduce-over-rules [rules items]
+  (reduce (rule-parser rules) {::position 0} items))
 
 (defn is-ok? [x]
-  (if-not (or (contains? x ::problem) (nil? x))
-    true
-    false))
+  (not (or (contains? x ::problem) (nil? x))))
 
 (defn validate
   ""
@@ -151,28 +232,31 @@
                 (filter (complement nil?))
                 (map tag-fn))
         seq-ed (eduction seq-xf user-sequence)
-        red-rules (reduce
-                   (partial rule-parsing rules) rule-parsing-default
-                   seq-ed)]
+        red-rules (reduce-over-rules rules seq-ed)]
     (if (is-ok? red-rules)
       {:ok true}
       {::problem (red-rules ::problem)})))
 
 (comment
-  (validate {:rules {:header {::not-eventually :header}, :beta {::is-after :header}}
-             :tag-fn (fn [_] 1)
-             :user-sequence [:header :trailer :header]})
+  (defrules mdmd {:header {::not-eventually :header}
+                  :beta {::is-after :header}
+                  :trailer {::is-after :header
+                            ::relax [:beta]
+                            ::next :header}
+                  :q {::relax [:q]}})
 
-  (let [seq-xf (comp
-                (filter (complement nil?))
-                (map :fun))]
-    (transduce seq-xf conj [{:fun 1} {:a 2}]))
+  (binding [debugprint true]
+    ;; has no ::relax, fails on second header
+    (validate {:rules {:header {::not-eventually :header}, :beta {::is-after :header}}
+               :tag-fn identity
+               :user-sequence [:header :trailer :header]}))
+
   (let [allrules {:header {::not-eventually :header}, :beta {::is-after :header}, :trailer {::is-after :header, ::relax [:header], ::next :header}}
         activerules {:header {::not-eventually :header}, :beta {::is-after :header}}
         k :beta]
-    (println "red:" (reduce (partial rule-parsing allrules) activerules [:beta]))
-    (println "rp:" (rule-parsing allrules activerules k))
-    (println "rr:" (rule-reduce activerules {::is-after :header} :beta)))
+    (println "red:" (reduce (rule-parser allrules) activerules [:beta]))
+    (println "rp:" ((rule-parser allrules) activerules k))
+    (println "rr:" (reduce (rule-parser allrules) {::is-after :header} [:beta])))
   (def demorules
     {:header {::not-eventually :header}
      :beta {::is-after :header}
@@ -182,27 +266,14 @@
 
   (validate-rules demorules)
 
-
-  (rule-parsing demorules
-                {:trailer {::is-after :header
-                           ::relax [:header]
-                           ::next :header}}
-                :header)
-  (rule-parsing demorules
-                {:trailer
-                 {::is-after :header, ::relax [:header], ::next :header}
-                 :header {::not-eventually :header}}
-                :header)
-  (reduce (partial rule-parsing demorules) {} [:header :header])
-  (reduce (partial rule-parsing demorules) {} [:header :trailer])
-  (reduce (partial rule-parsing demorules) {} [:header :beta :beta :trailer])
-  (reduce (partial rule-parsing demorules) {} [:header :trailer :header])
-  (reduce (partial rule-parsing demorules) {} [:trailer])
+  (reduce (rule-parser demorules) {} [:header :header])
+  (reduce (rule-parser demorules) {} [:header :trailer])
+  (reduce (rule-parser demorules) {} [:header :beta :beta :trailer])
+  (reduce (rule-parser demorules) {} [:header :trailer :header])
+  (reduce (rule-parser demorules) {} [:trailer])
 
   (binding [debugprint true]
-    (reduce (partial rule-parsing demorules) {} [:header :trailer :header]))
+    (reduce (rule-parser demorules) {} [:header :trailer :header]))
 
 
-  (s/explain ::rule-consistent {:X {::not-eventually :Y}})
-  (get-subjects demorules)
-  (set (keys demorules)))
+  (s/explain ::rule-consistent {:X {::not-eventually :Y}}))
