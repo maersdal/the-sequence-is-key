@@ -8,10 +8,12 @@
 (def ^:dynamic debugprint false)
 (def valid-rules 
   "temporality: 
+   pre refers to the current thing, if valid according to the current rules
+   post refers to whatever comes after in the sequence, can be immediate, most things are not
    ::not-eventually - post
-   ::next - post
+   ::next - post (immediate, i.e. the following item)
    ::relax - post
-   ::is-after - immediate
+   ::is-after - pre
    "
   #{::not-eventually ::is-after ::relax ::next ::free})
 
@@ -56,6 +58,7 @@
 (defn explain-rules [rules]
   (let [notok #(if (str/includes? % "Success!") "" %)]
     (str (notok (s/explain-str ::rules rules))
+         "\n"
          (notok (s/explain-str ::rule-consistent rules)))))
 
 (defn get-trigd-by 
@@ -67,15 +70,15 @@
        (map vals)
        flatten))
 
-(defn not-eventually-not-released-warnings 
-  "warning: not eventually should be released by something?"
+(defn not-eventually-not-released-warnings
+  "warning: not eventually should be released by something
+   if not the item specified can only happen once.
+   This is a valid logic condition, but it is assumed to usually be a logical error"
   [rules]
   (let [not-eventually-triggers (set (get-trigd-by rules ::not-eventually))
         relax-targets (set (get-trigd-by rules ::relax))
-        m-s (set/difference not-eventually-triggers relax-targets)
-        _ (println not-eventually-triggers
-                   relax-targets)]
-    (if-not (empty? m-s)
+        m-s (set/difference not-eventually-triggers relax-targets)]
+    (when (seq m-s)
       (let [n (count m-s)
             plural? (> n 1)
             noun (fn [singular plural] (if plural? singular plural))
@@ -84,15 +87,12 @@
              " the " (noun "targets" "target") " " repr " "
              (noun "are" "is") " never ::relax 'ed, thus " repr
              " can never appear more than once in your sequence"
-             " please make sure that this is your intended behavior"))
-      nil)))
+             " please make sure that this is your intended behavior")))))
 
 (defn explain-warnings [rules]
   (remove nil? ((juxt
                  not-eventually-not-released-warnings)
                 rules)))
-
-
 
 (defmacro defrules
   [name rulemap]
@@ -147,14 +147,16 @@
         clause-reducer (fn [arules [rule value]]
                          (case rule
                            ::not-eventually (if (= value item)
-                                              (update arules ::problem conj-with-vec {:rule [::not-eventually value]
-                                                                             :broken-by item
-                                                                             ::position pos})
+                                              (update arules ::problem conj-with-vec
+                                                      {:rule [::not-eventually value]
+                                                       :broken-by item
+                                                       ::position pos})
                                               arules)
                            ::is-after (if-not (contains? rules value)
-                                        (update arules ::problem conj-with-vec {:rule [::is-after value]
-                                                                       :broken-by item
-                                                                       ::position pos})
+                                        (update arules ::problem conj-with-vec
+                                                {:rule [::is-after value]
+                                                 :broken-by item
+                                                 ::position pos})
                                         arules)
                            arules))
         rules (let [r (get rules ::next :no-next-clause)]
@@ -184,7 +186,7 @@
 (defn update-cond-post [all-rules rules item]
   {:pre [(keyword? item)]}
   (let [rules (-> (dissoc rules ::next)
-                  (update ::position inc-or-zero)) ; ::next is always relaxed.
+                  (update ::position inc-or-zero)) ; ::next is always relaxed. it has either been broken or validated at this point
         clauses (all-rules item)
         newrules (assoc rules item clauses)]
     (reduce (fn [arules [rule value]]
@@ -237,6 +239,14 @@
       {:ok true}
       {::problem (red-rules ::problem)})))
 
+(defn rule-table-fmt
+ "just for visuals
+  print with pprint/print-table"
+  [rules]
+  (vec (for [[k v] rules
+             [rule tag] v]
+         {:hit k :rule rule :target tag})))
+
 (comment
   (defrules mdmd {:header {::not-eventually :header}
                   :beta {::is-after :header}
@@ -244,7 +254,8 @@
                             ::relax [:beta]
                             ::next :header}
                   :q {::relax [:q]}})
-
+  (require '[clojure.pprint :as pp])
+  (pp/print-table (rule-table-fmt mdmd))
   (binding [debugprint true]
     ;; has no ::relax, fails on second header
     (validate {:rules {:header {::not-eventually :header}, :beta {::is-after :header}}

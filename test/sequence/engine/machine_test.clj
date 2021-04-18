@@ -67,6 +67,11 @@
                          :tag-fn identity
                          :user-sequence [:header :trailer :header]}))))
 
+(deftest rules-are-open
+  (is (is-ok? (validate {:rules {}
+                         :tag-fn identity
+                         :user-sequence [:a :b :c]}))))
+
 (deftest badrules
   (let [r
         [{:X {::m/not-eventually :Y}}
