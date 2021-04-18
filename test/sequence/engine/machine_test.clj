@@ -19,6 +19,39 @@
   ;; [:trailer :header] -> fail  ('before' criterion)
   ;; 
 ;;
+;;
+
+(deftest eventually-tdd
+  (let [okseq [:a :b :c :d :e]
+        nokseq [:a :b :c :d]]
+    (is (not (contains? 
+              (reduce
+               (rule-parser {})
+               {::position 0
+                ::m/eventually :e} okseq) ::m/eventually)))
+    (is (contains? (reduce
+                    (rule-parser {})
+                    {::position 0
+                     ::m/eventually :e} nokseq) ::m/eventually))
+    (let [okseq2 [:q :a :b :f]
+          nokseq2 [:q :a :b]
+          rules {:q {::m/eventually :f}}]
+      (is (not (contains? (reduce
+                           (rule-parser rules)
+                           {::position 0}
+                           okseq2)
+                          ::m/eventually)))
+      (is (contains? (reduce
+                      (rule-parser rules)
+                      {::position 0}
+                      nokseq2)
+                     ::m/eventually))
+      (is (is-ok? (validate {:rules rules
+                             :tag-fn identity
+                             :user-sequence okseq2})))
+      (is (not (is-ok? (validate {:rules rules
+                                  :tag-fn identity
+                                  :user-sequence nokseq2})))))))
 
 (deftest rules-valid
   (is (validate-rules demorules-t)))
@@ -77,19 +110,6 @@
         [{:X {::m/not-eventually :Y}}
          {:X {::m/relax [:Y]}}]]
     (is (not (valid-rules r)))))
-
-(reduce (rule-parser {:header {::m/not-eventually :header
-                                        ::m/is-after :b}})
-        rule-parsing-default
-        [:b :header])
-(reduce (rule-parser {:header {::m/not-eventually :header
-                                        ::m/is-after :b
-                                        }
-                               ;:b {::m/free :b}
-                               })
-        rule-parsing-default
-        [:q :header])
-
 
 (comment
   (t/run-tests)

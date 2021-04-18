@@ -6,16 +6,17 @@
    [clojure.pprint :as pprint]))
 ;; 2021 Magnus Rentsch Ersdal
 (def ^:dynamic debugprint false)
-(def valid-rules 
+(def valid-rules
   "temporality: 
    pre refers to the current thing, if valid according to the current rules
    post refers to whatever comes after in the sequence, can be immediate, most things are not
    ::not-eventually - post
    ::next - post (immediate, i.e. the following item)
    ::relax - post
+   ::eventually - post, only broken after whole sequence!
    ::is-after - pre
    "
-  #{::not-eventually ::is-after ::relax ::next ::free})
+  #{::not-eventually ::eventually ::is-after ::relax ::next ::free})
 
 (defn get-subjects [rules]
   (->> (vals rules)
@@ -61,7 +62,7 @@
          "\n"
          (notok (s/explain-str ::rule-consistent rules)))))
 
-(defn get-trigd-by 
+(defn get-trigd-by
   "get whatever ::rule triggers in rules"
   [rules rule]
   (->> (vals rules)
@@ -138,8 +139,8 @@
     (inc x)))
 
 
-(defn check-cond 
-  "all conditions in here."
+(defn check-cond
+  "all running conditions in here."
   [rules item]
   {:pre [(keyword? item)]}
   (let [clauses (rules item)
@@ -172,12 +173,22 @@
     (reduce clause-reducer
             rules clauses)))
 
+(defn check-post-seq
+  [rules]
+  (if-let [item (rules ::eventually)]
+    (update rules
+            ::problem
+            conj-with-vec
+            {:rule [::eventually item]
+             :broken-by ::end-of-sequence})
+    rules))
+
 (defn update-cond-pre
   ""
   [all-rules rules item]
   (let [clauses (all-rules item)]
     (reduce (fn [arules clause]
-              (let [[rule value] clause]
+              (let [[rule _] clause]
                 (case rule
                   ::is-after (update arules item conj clause)
                   arules))) rules clauses)))
@@ -185,13 +196,17 @@
 
 (defn update-cond-post [all-rules rules item]
   {:pre [(keyword? item)]}
-  (let [rules (-> (dissoc rules ::next)
+  (let [rules (if (= (get rules ::eventually ::none) item)
+                (dissoc rules ::eventually)
+                rules)
+        rules (-> (dissoc rules ::next)
                   (update ::position inc-or-zero)) ; ::next is always relaxed. it has either been broken or validated at this point
         clauses (all-rules item)
         newrules (assoc rules item clauses)]
     (reduce (fn [arules [rule value]]
               (case rule
                 ::next (assoc arules ::next value)
+                ::eventually (assoc arules ::eventually value)
                 ::relax (apply dissoc arules value)
                 arules))
             newrules clauses)))
@@ -208,13 +223,10 @@
   (fn [active-rules item]
     (when debugprint
       (println active-rules item))
-    (let [
-          pre-rules (update-cond-pre all-rules active-rules item)
+    (let [pre-rules (update-cond-pre all-rules active-rules item)
           checked-rules (check-cond pre-rules item)
-          post-rules (update-cond-post all-rules checked-rules item)
-          ]
-      post-rules)
-    ))
+          post-rules (update-cond-post all-rules checked-rules item)]
+      post-rules)))
 
 (def rule-parsing-default {::position 0})
 
@@ -234,13 +246,14 @@
                 (filter (complement nil?))
                 (map tag-fn))
         seq-ed (eduction seq-xf user-sequence)
-        red-rules (reduce-over-rules rules seq-ed)]
-    (if (is-ok? red-rules)
+        red-rules (reduce-over-rules rules seq-ed)
+        pv-rules (check-post-seq red-rules)]
+    (if (is-ok? pv-rules)
       {:ok true}
-      {::problem (red-rules ::problem)})))
+      {::problem (pv-rules ::problem)})))
 
 (defn rule-table-fmt
- "just for visuals
+  "just for visuals
   print with pprint/print-table"
   [rules]
   (vec (for [[k v] rules
