@@ -83,6 +83,7 @@ You will not use this library for type-checking you data. That is more easily do
 
 * Rules:
   * `::not-eventually x`: x is no longer a valid sequence item
+  * `::eventually x` : x must appear somewhere in the sequence. will not cause an issue until sequence is fully iterated over.
   * `::is-after y`: y must come before
   * `::relax [x y z]`: the active rules concerning x, y, and z are released.
   * `::next x`: x must be the following element in the collection
